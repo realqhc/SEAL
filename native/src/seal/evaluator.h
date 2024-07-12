@@ -4,6 +4,7 @@
 #pragma once
 
 #include "seal/ciphertext.h"
+#include "seal/ckks.h"
 #include "seal/context.h"
 #include "seal/galoiskeys.h"
 #include "seal/memorymanager.h"
@@ -80,7 +81,7 @@ namespace seal
         @param[in] context The SEALContext
         @throws std::invalid_argument if the encryption parameters are not valid
         */
-        Evaluator(const SEALContext &context);
+        Evaluator(const SEALContext &context, CKKSEncoder &encoder);
 
         /**
         Negates a ciphertext.
@@ -1292,6 +1293,106 @@ namespace seal
             complex_conjugate_inplace(destination, galois_keys, std::move(pool));
         }
 
+        /*
+        J.-W. Lee: Since we need to add/multiply constants or vectors to the
+        ciphertext, we add the required function as follows.
+        */
+        void add_const_inplace(Ciphertext &encrypted, double value) const;
+
+        inline void add_const(const Ciphertext &encrypted, double value, Ciphertext &destination) const{
+            destination = encrypted;
+            add_const_inplace(destination, value);
+        }
+
+        void multiply_const_inplace(Ciphertext &encrypted, double value) const;
+
+        inline void multiply_const(const Ciphertext &encrypted, double value, Ciphertext &destination) const {
+            destination = encrypted;
+            multiply_const_inplace(destination, value);
+        }
+
+        template <typename T>
+        void multiply_vector_inplace(Ciphertext &encrypted, const std::vector<T> &value) const;
+
+        template <typename T>
+        void multiply_vector(Ciphertext &encrypted, const std::vector<T> &value, Ciphertext &destination) const {
+            destination = encrypted;
+            multiply_vector_inplace(destination, value);
+        }
+
+        /*
+        J.-W. Lee: Kim et al. (CT-RSA 2022) proposed the methods to reduce the
+        approximation error in CKKS scheme. The following functions are the
+        homomorphic operations with this method.
+        */
+
+        void add_inplace_reduced_error(Ciphertext &encrypted1, const Ciphertext &encrypted2) const;
+
+        inline void add_reduced_error(const Ciphertext &encrypted1, const Ciphertext &encrypted2, Ciphertext &destination) const
+        {
+            if (&encrypted2 == &destination)
+            {
+                add_inplace_reduced_error(destination, encrypted1);
+            }
+            else
+            {
+                destination = encrypted1;
+                add_inplace_reduced_error(destination, encrypted2);
+            }
+        }
+
+        inline void double_inplace(Ciphertext & encrypted) const {
+            add_inplace(encrypted, encrypted);
+        }
+
+        void sub_inplace_reduced_error(Ciphertext &encrypted1, const Ciphertext &encrypted2)  const;
+
+        inline void sub_reduced_error(const Ciphertext &encrypted1, const Ciphertext &encrypted2, Ciphertext &destination) const
+        {
+            if (&encrypted2 == &destination)
+            {
+                sub_inplace_reduced_error(destination, encrypted1);
+            }
+            else
+            {
+                destination = encrypted1;
+                sub_inplace_reduced_error(destination, encrypted2);
+            }
+        }
+
+        void multiply_inplace_reduced_error(Ciphertext &encrypted1, const Ciphertext &encrypted2, const RelinKeys &relin_keys) const;
+
+        inline void multiply_reduced_error(const Ciphertext &encrypted1, const Ciphertext &encrypted2, const RelinKeys &relin_keys, Ciphertext &destination) const
+        {
+            if (&encrypted2 == &destination)
+            {
+                multiply_inplace_reduced_error(destination, encrypted1, relin_keys);
+            }
+            else
+            {
+                destination = encrypted1;
+                multiply_inplace_reduced_error(destination, encrypted2, relin_keys);
+            }
+        }
+
+		template <typename T, typename = std::enable_if_t<std::is_same<std::remove_cv_t<T>, double>::value ||std::is_same<std::remove_cv_t<T>, std::complex<double>>::value>>
+		void multiply_vector_inplace_reduced_error(Ciphertext &encrypted, const std::vector<T> &value)
+		{
+			Plaintext plain;
+			
+			encoder_.encode(value, encrypted.scale(), plain);
+			mod_switch_to_inplace(plain, encrypted.parms_id());
+			multiply_plain_inplace(encrypted, plain);
+		}
+
+		template <typename T, typename = std::enable_if_t<std::is_same<std::remove_cv_t<T>, double>::value ||std::is_same<std::remove_cv_t<T>, std::complex<double>>::value>>
+		inline void multiply_vector_reduced_error(Ciphertext &encrypted, const std::vector<T> &value, Ciphertext &destination)
+		{
+			destination = encrypted;
+			multiply_vector_inplace_reduced_error(destination, value);
+		}
+
+
         /**
         Enables access to private members of seal::Evaluator for SEAL_C.
         */
@@ -1364,5 +1465,7 @@ namespace seal
         void multiply_plain_ntt(Ciphertext &encrypted_ntt, const Plaintext &plain_ntt) const;
 
         SEALContext context_;
+
+        CKKSEncoder &encoder_;
     };
 } // namespace seal
